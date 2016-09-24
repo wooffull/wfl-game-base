@@ -1,0 +1,26 @@
+{
+  "name": "game-jam-1",
+  "version": "0.0.0",
+  "description": "1st lil game jam with my boyfriend",
+  "main": "index.js",
+  "dependencies": {
+    "browserify": "^13.0.0",
+    "jquery": "^2.2.2",
+    "mkdirp": "^0.5.1",
+    "uglify-js": "^2.6.2"
+  },
+  "devDependencies": {
+    "jshint": "^2.9.1",
+    "watchify": "^3.7.0"
+  },
+  "scripts": {
+    "build-js": "mkdirp ../dist && browserify index.js | uglifyjs -mc > ../dist/game.js",
+    "build": "npm run build-js",
+    "watch-js": "watchify index.js -o ../dist/game.js -v -d",
+    "watch": "npm run watch-js",
+    "pretest": "jshint ./src",
+    "test": "echo \"Tests Complete\""
+  },
+  "author": "Benjamin Beshel, Hector Fernando Pineiro II",
+  "license": "MIT"
+}

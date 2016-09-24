@@ -1,0 +1,27 @@
+{
+  "name": "wfl",
+  "version": "0.0.0",
+  "description": "HTML5 Canvas game framework developed in JavaScript.",
+  "main": "index.js",
+  "dependencies": {
+    "browserify": "^13.0.0",
+    "browserify-fs": "^1.0.0",
+    "jquery": "^2.2.2",
+    "mkdirp": "^0.5.1",
+    "uglify-js": "^2.6.2"
+  },
+  "devDependencies": {
+    "jshint": "^2.9.1",
+    "watchify": "^3.7.0"
+  },
+  "scripts": {
+    "build-js": "mkdirp ../dist && browserify index.js -s wfl | uglifyjs -mc > ../dist/wfl.js",
+    "build": "npm run build-js",
+    "watch-js": "watchify index.js -s wfl -o ../dist/wfl.js -v -d",
+    "watch": "npm run watch-js",
+    "pretest": "jshint ./src",
+    "test": "echo \"Tests Complete\""
+  },
+  "author": "Hector Fernando Pineiro II",
+  "license": "MIT"
+}

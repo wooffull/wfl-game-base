@@ -1,0 +1,9 @@
+html {
+    background-color: black;
+}
+
+#game-canvas {
+    display: block;
+    border: 1px solid white;
+    margin: auto;
+}
