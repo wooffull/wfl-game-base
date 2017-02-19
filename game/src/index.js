@@ -22,11 +22,10 @@ var onLoadWindow = function () {
   }
 
   l.load(onLoadAssets);
+  resize();
 };
 
 var onLoadAssets = function () {
-  resize();
-  
   Assets.get = function (path) { return PIXI.loader.resources[path]; };
   
   // Load scene here
