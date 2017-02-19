@@ -1,7 +1,6 @@
 "use strict";
 
 var $ = require('jquery');
-var geom = require('../geom');
 
 var Mouse = function (canvas) {
     this._canvas = undefined;
@@ -15,7 +14,7 @@ var Mouse = function (canvas) {
     this._onLeaveRef = this._onLeave.bind(this);
     this._onEnterRef = this._onEnter.bind(this);
 
-    this.position = new geom.Vec2(-Infinity, -Infinity);
+    this.position = {x: -Infinity, y: -Infinity};
     this.touchingCanvas = false;
 
     // If a canvas is passed in, add listeners to it
@@ -84,9 +83,9 @@ Mouse.prototype = Object.freeze(Object.create(Mouse.prototype, {
                 which : which,
                 isDown : false,
                 dragging : false,
-                prevPos : new geom.Vec2(-Infinity, -Infinity),
-                dragStart : new geom.Vec2(-Infinity, -Infinity),
-                dragEnd : new geom.Vec2(-Infinity, -Infinity)
+                prevPos : {x: -Infinity, y: -Infinity},
+                dragStart : {x: -Infinity, y: -Infinity},
+                dragEnd : {x: -Infinity, y: -Infinity}
             };
         }
     },
@@ -118,9 +117,10 @@ Mouse.prototype = Object.freeze(Object.create(Mouse.prototype, {
     _getMousePositionFromEvent : {
         value : function (e) {
             var rect = this._canvas.getBoundingClientRect();
-            var pos = new geom.Vec2();
-            pos.x = e.clientX - rect.left;
-            pos.y = e.clientY - rect.top;
+            var pos = {
+              x: e.clientX - rect.left,
+              y: e.clientY - rect.top
+            };
 
             return pos;
         }

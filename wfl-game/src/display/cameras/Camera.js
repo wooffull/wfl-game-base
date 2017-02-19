@@ -31,13 +31,11 @@ Camera.prototype = Object.freeze(Object.create(Camera.prototype, {
     update : {
         value : function (dt) {
             if (this.followObj) {
-                var cameraDisplacement = geom.Vec2.subtract(
-                    this.position,
-                    this.followObj.position
-                );
-                cameraDisplacement.multiply(this.followRate);
+                var cameraDisplacementX = this.followRate * (this.position._x - this.followObj.position._x);
+                var cameraDisplacementY = this.followRate * (this.position._y - this.followObj.position._y)
 
-                this.position.subtract(cameraDisplacement);
+                this.position._x -= cameraDisplacementX;
+                this.position._y -= cameraDisplacementY;
             }
         }
     }

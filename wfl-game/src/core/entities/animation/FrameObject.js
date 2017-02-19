@@ -1,36 +1,40 @@
 "use strict";
 
-var geom = require('../../../geom');
+const PIXI = require('pixi.js');
+const geom = require('../../../geom');
 
 /**
  * Represents a key frame in an animation, with a duration
  */
-var FrameObject = function (graphic, duration, createBoundingBox) {
+//var FrameObject = function (texture, duration, createBoundingBox) {
+class FrameObject extends PIXI.Sprite {
+  constructor(texture, duration, vertices) {
+    super(texture);
+    
     if (isNaN(duration) || duration < 1) {
-        duration = 1;
+      duration = 1;
     }
 
-    if (typeof createBoundingBox !== "boolean") {
-        createBoundingBox = true;
-    }
-
-    this.graphic = graphic;
     this.duration = duration;
-    this.vertices = [];
 
-    if (createBoundingBox) {
-        var w = this.graphic.width;
-        var h = this.graphic.height;
+    if (typeof vertices === 'undefined') {
+      var w = this.width;
+      var h = this.height;
 
-        this.vertices.push(
-            new geom.Vec2(-w * 0.5, -h * 0.5),
-            new geom.Vec2(w * 0.5, -h * 0.5),
-            new geom.Vec2(w * 0.5, h * 0.5),
-            new geom.Vec2(-w * 0.5, h * 0.5)
-        );
+      this.vertices = [];
+      this.vertices.push(
+        new geom.Vec2(-w * 0.5, -h * 0.5),
+        new geom.Vec2(w * 0.5, -h * 0.5),
+        new geom.Vec2(w * 0.5, h * 0.5),
+        new geom.Vec2(-w * 0.5, h * 0.5)
+      );
+    } else {
+      this.vertices = vertices;
     }
+  
+    // Center the sprite
+    this.anchor.set(0.5);
+  }
 };
-
-Object.freeze(FrameObject);
 
 module.exports = FrameObject;

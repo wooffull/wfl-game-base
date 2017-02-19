@@ -50,15 +50,15 @@ LivingObject.prototype = Object.freeze(Object.create(PhysicsObject.prototype, {
             ctx.save();
 
             // Make the living object blink when it has taken damage
-            if ((this.invincibilityFrameCounter % (LivingObject.INVINCIBILITY_BLINK_TIMER * 2)) > LivingObject.INVINCIBILITY_BLINK_TIMER) {
+            if ((this.invincibilityFrameCounter % (LivingObject.INVINCIBILITY_BLINK_TIMER << 1)) > LivingObject.INVINCIBILITY_BLINK_TIMER) {
                 ctx.globalAlpha = 0.25;
             }
 
             // The rendered angle for the graphic
-            var displayedAngle = this.getDisplayAngle(this.getRotation());
+            var displayedAngle = this.getDisplayAngle(this.rotation);
 
             ctx.rotate(displayedAngle);
-            ctx.drawImage(this.graphic, -this.graphic.width * 0.5, -this.graphic.height * 0.5);
+            ctx.drawImage(this.graphic, (0.5 - (this.graphic.width >> 1)) | 0, (0.5 - (this.graphic.height >> 1)) | 0);
 
             ctx.restore();
         }

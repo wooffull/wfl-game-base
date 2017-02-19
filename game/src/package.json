@@ -1,7 +1,7 @@
 {
-  "name": "game-jam-1",
+  "name": "wfl-game-base",
   "version": "0.0.0",
-  "description": "1st lil game jam with my boyfriend",
+  "description": "Base for starting games with the WFL Game Engine.",
   "main": "index.js",
   "dependencies": {
     "browserify": "^13.0.0",

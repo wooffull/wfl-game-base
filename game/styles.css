@@ -1,9 +1,21 @@
 html {
-    background-color: black;
+  background-color: black;
+}
+        
+body {
+  margin: 0;
+  width: 100vw;
+  height: 100vh;
+  position: relative;
+  overflow: hidden;
 }
 
 #game-canvas {
-    display: block;
-    border: 1px solid white;
-    margin: auto;
-}
+  display: block;
+  margin: auto;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  border: 1px #222 solid;
+} 
