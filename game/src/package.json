@@ -7,16 +7,18 @@
     "browserify": "^13.0.0",
     "jquery": "^2.2.2",
     "mkdirp": "^0.5.1",
-    "uglify-js": "^2.6.2"
+    "uglify-js": "^2.7.5"
   },
   "devDependencies": {
+    "babel-preset-env": "^1.1.10",
+    "babelify": "^7.3.0",
     "jshint": "^2.9.1",
     "watchify": "^3.7.0"
   },
   "scripts": {
-    "build-js": "mkdirp ../dist && browserify index.js | uglifyjs -mc > ../dist/game.js",
+    "build-js": "mkdirp ../dist && browserify index.js -t babelify | uglifyjs -mc > ../dist/game.js",
     "build": "npm run build-js",
-    "watch-js": "watchify index.js -o ../dist/game.js -v -d",
+    "watch-js": "watchify index.js -o ../dist/game.js -v -d -t babelify",
     "watch": "npm run watch-js",
     "pretest": "jshint ./src",
     "test": "echo \"Tests Complete\""
