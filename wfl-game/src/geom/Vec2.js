@@ -1,10 +1,9 @@
 "use strict";
 
-const PIXI = require('pixi.js');
-
 // 2-D Vector
-var Vec2 = function (x, y, cb = () => null, scope = null) {
-    PIXI.ObservablePoint.call(this, cb, scope, x, y);
+var Vec2 = function (x = 0, y = 0) {
+    this._x = x;
+    this._y = y;
 };
 Object.defineProperties(Vec2, {
     add : {
@@ -78,17 +77,29 @@ Object.defineProperties(Vec2, {
         }
     }
 });
-Vec2.prototype = Object.freeze(Object.create(PIXI.ObservablePoint.prototype, {
+Vec2.prototype = Object.create(Vec2.prototype, {
+    x : {
+        get: function ()      { return this._x;  },
+        set: function (value) { this._x = value; }
+    },
+  
+    y : {
+        get: function ()      { return this._y;  },
+        set: function (value) { this._y = value; }
+    },
+  
     getMagnitudeSquared : {
         value : function () {
             return this._x * this._x + this._y * this._y;
-        }
+        },
+        enumerable: true
     },
 
     getMagnitude : {
         value : function () {
             return Math.sqrt(this.getMagnitudeSquared());
-        }
+        },
+        enumerable: true
     },
     
     setMagnitude : {
@@ -101,13 +112,15 @@ Vec2.prototype = Object.freeze(Object.create(PIXI.ObservablePoint.prototype, {
             this._x *= value;
             this._y *= value;
             return this;
-        }
+        },
+        enumerable: true
     },
     
     getAngle : {
         value : function () {
             return Math.atan2(this._y, this._x);
-        }
+        },
+        enumerable: true
     },
     
     setAngle : {
@@ -117,14 +130,16 @@ Vec2.prototype = Object.freeze(Object.create(PIXI.ObservablePoint.prototype, {
             this._x = mag * Math.cos(value);
             this._y = mag * Math.sin(value);
             return this;
-        }
+        },
+        enumerable: true
     },
     
     rotate : {
         value : function (theta) {
             this.setAngle(this.getAngle() + theta);
             return this;
-        }
+        },
+        enumerable: true
     },
     
     getDirection : {
@@ -132,7 +147,8 @@ Vec2.prototype = Object.freeze(Object.create(PIXI.ObservablePoint.prototype, {
             var mag = this.getMagnitude();
             var v = new Vec2(this._x / mag, this._y / mag);
             return v;
-        }
+        },
+        enumerable: true
     },
     
     add : {
@@ -140,7 +156,8 @@ Vec2.prototype = Object.freeze(Object.create(PIXI.ObservablePoint.prototype, {
             this._x += other._x;
             this._y += other._y;
             return this;
-        }
+        },
+        enumerable: true
     },
     
     subtract : {
@@ -148,7 +165,8 @@ Vec2.prototype = Object.freeze(Object.create(PIXI.ObservablePoint.prototype, {
             this._x -= other._x;
             this._y -= other._y;
             return this;
-        }
+        },
+        enumerable: true
     },
     
     multiply : {
@@ -156,7 +174,8 @@ Vec2.prototype = Object.freeze(Object.create(PIXI.ObservablePoint.prototype, {
             this._x *= scalar;
             this._y *= scalar;
             return this;
-        }
+        },
+        enumerable: true
     },
     
     divide : {
@@ -164,7 +183,8 @@ Vec2.prototype = Object.freeze(Object.create(PIXI.ObservablePoint.prototype, {
             this._x /= scalar;
             this._y /= scalar;
             return this;
-        }
+        },
+        enumerable: true
     },
     
     normalize : {
@@ -174,7 +194,8 @@ Vec2.prototype = Object.freeze(Object.create(PIXI.ObservablePoint.prototype, {
             this._x /= mag;
             this._y /= mag;
             return this;
-        }
+        },
+        enumerable: true
     },
     
     limit : {
@@ -184,21 +205,23 @@ Vec2.prototype = Object.freeze(Object.create(PIXI.ObservablePoint.prototype, {
             if (magSquared > maxMagnitude * maxMagnitude) {
                 this.setMagnitude(maxMagnitude);
             }
-        }
+        },
+        enumerable: true
     },
     
     clone : {
         value : function () {
             return new Vec2(this._x, this._y);
-        }
+        },
+        enumerable: true
     },
     
     getOrthogonal : {
         value : function () {
             return new Vec2(this._y, -this._x);
-        }
+        },
+        enumerable: true
     }
-}));
-Object.freeze(Vec2);
+});
 
 module.exports = Vec2;
