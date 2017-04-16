@@ -7,6 +7,10 @@ const GameObjectState = animation.GameObjectState;
 const FrameObject     = animation.FrameObject;
 const debug           = require('../../debug');
 
+// An ID counter used for GameObject's unique IDs. Increments every time a
+// GameObject is created
+var idCounter = 0;
+
 /**
  * Generic object for the game's canvas
  */
@@ -16,6 +20,7 @@ var GameObject = function () {
   // Optimization: Use transform.position to avoid the getter for position
   this.transform.position = new geom.Vec2(this.position.x, this.position.y);
   
+  this.wflId              = idCounter++;
   this.vertices           = [];
   this.states             = {};
   this.currentState       = undefined;

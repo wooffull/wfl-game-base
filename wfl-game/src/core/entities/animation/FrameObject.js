@@ -31,6 +31,17 @@ class FrameObject extends PIXI.Sprite {
     } else {
       this.vertices = vertices;
     }
+    
+    // Link the vertices to adjacent vertices
+    var vertices      = this.vertices;
+    var totalVertices = vertices.length;
+    for (var i = 0; i < vertices.length; i++) {
+      var prev = vertices[(totalVertices - 1 + i) % totalVertices];
+      var next = vertices[(i + 1) % totalVertices];
+      
+      vertices[i].prev  = prev;
+      vertices[i].next  = next;
+    }
   
     // Center the sprite
     this.anchor.set(0.5);

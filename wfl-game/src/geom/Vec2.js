@@ -190,6 +190,9 @@ Vec2.prototype = Object.create(Vec2.prototype, {
     normalize : {
         value : function () {
             var mag = this.getMagnitude();
+          
+            // No length means it cannot be normalized
+            if (mag === 0) return this;
             
             this._x /= mag;
             this._y /= mag;

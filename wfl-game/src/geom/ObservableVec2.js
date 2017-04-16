@@ -3,7 +3,7 @@
 const PIXI = require('pixi.js');
 var Vec2 = require('./Vec2');
 
-// 2-D Vector
+// 2-D Vector that inherits from PIXI's ObservablePoint and WFL's Vec2
 var ObservableVec2 = function (x, y, cb = () => null, scope = null) {
   PIXI.ObservablePoint.call(this, cb, scope, x, y);
   Vec2.call(this, x, y);

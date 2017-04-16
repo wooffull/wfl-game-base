@@ -31,11 +31,15 @@ Camera.prototype = Object.freeze(Object.create(Camera.prototype, {
     update : {
         value : function (dt) {
             if (this.followObj) {
-                var cameraDisplacementX = this.followRate * (this.position._x - this.followObj.position._x);
-                var cameraDisplacementY = this.followRate * (this.position._y - this.followObj.position._y)
-
-                this.position._x -= cameraDisplacementX;
-                this.position._y -= cameraDisplacementY;
+                var dx = this.followRate * (this.position._x - this.followObj.position._x);
+                var dy = this.followRate * (this.position._y - this.followObj.position._y);
+              
+                // Prevent very small movements from shaking the camera
+                if (Math.abs(dx) < 0.5) dx = 0;
+                if (Math.abs(dy) < 0.5) dy = 0;
+              
+                this.position._x -= dx;
+                this.position._y -= dy;
             }
         }
     }
