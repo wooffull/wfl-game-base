@@ -31,6 +31,9 @@ var GameObject = function () {
   // A reference to the previously added sprite so that it can be removed when
   // a new sprite is set with _setSprite()
   this._prevSprite        = undefined;
+  
+  this._cachedWidth  = 0;
+  this._cachedHeight = 0;
 };
 
 Object.defineProperties(GameObject, {
@@ -99,8 +102,8 @@ GameObject.prototype = Object.freeze(Object.create(PIXI.Container.prototype, {
     value: function (container = debug.getContainer()) {
       container.lineStyle(1, 0xFFBBBB, 1);
       container.drawRect(
-        this.calculationCache.x - this.calculationCache.aabbWidth  * 0.5,
-        this.calculationCache.y - this.calculationCache.aabbHeight * 0.5,
+        this.calculationCache.x - this.calculationCache.aabbHalfWidth,
+        this.calculationCache.y - this.calculationCache.aabbHalfHeight,
         this.calculationCache.aabbWidth,
         this.calculationCache.aabbHeight
       );
@@ -152,8 +155,8 @@ GameObject.prototype = Object.freeze(Object.create(PIXI.Container.prototype, {
       // The contents of this function should be copypasted into
       // PhysicsObject's cacheCalculations (for optimization)
       var position = this.transform.position;
-      var width    = this.scale.x * this.getLocalBounds().width;
-      var height   = this.scale.y * this.getLocalBounds().height;
+      var width    = this._cachedWidth;
+      var height   = this._cachedHeight;
       var rotation = this.transform.rotation;
 
       // Optimization for calculating aabb width and height
@@ -171,6 +174,10 @@ GameObject.prototype = Object.freeze(Object.create(PIXI.Container.prototype, {
       this.calculationCache.aabbHeight =
           absCosRotation * height +
           absSinRotation * width;
+      this.calculationCache.aabbHalfWidth =
+        this.calculationCache.aabbWidth * 0.5;
+      this.calculationCache.aabbHalfHeight =
+        this.calculationCache.aabbHeight * 0.5;
     }
   },
   
@@ -191,14 +198,16 @@ GameObject.prototype = Object.freeze(Object.create(PIXI.Container.prototype, {
       if (sprite) {
         this.addChild(sprite);
         this._prevSprite = sprite;
+        this._cachedWidth  = sprite.width;
+        this._cachedHeight = sprite.height;
       } else {
         this.width  = 0;
         this.height = 0;
+        this._cachedWidth  = 0;
+        this._cachedHeight = 0;
       }
     }
   }
 }));
-
-Object.freeze(GameObject);
 
 module.exports = GameObject;

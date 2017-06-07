@@ -221,6 +221,7 @@ Vec2.prototype = Object.create(Vec2.prototype, {
     
     getOrthogonal : {
         value : function () {
+            // To the left
             return new Vec2(this._y, -this._x);
         },
         enumerable: true

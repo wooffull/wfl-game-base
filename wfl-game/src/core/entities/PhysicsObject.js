@@ -15,16 +15,17 @@ var PhysicsObject = function () {
   
   this.transform.rotation = 0; // Updated per frame according to this.forward
 
-  this.velocity        = new geom.Vec2();
-  this.acceleration    = new geom.Vec2();
-  this.maxSpeed        = PhysicsObject.DEFAULT_MAX_SPEED;
-  this.maxAcceleration = PhysicsObject.DEFAULT_MAX_ACCELERATION;
-  this.forward         = new geom.Vec2(1, 0);
-  this.mass            = 1.0;
-  this.friction        = 0.0; // This object's surface's friction
-  this.restitution     = 0.0; // This object's surface's bounciness
-  this.solid           = true;
-  this.fixed           = false;
+  this.velocity           = new geom.Vec2();
+  this.acceleration       = new geom.Vec2();
+  this.maxSpeed           = PhysicsObject.DEFAULT_MAX_SPEED;
+  this.maxAcceleration    = PhysicsObject.DEFAULT_MAX_ACCELERATION;
+  this.forward            = new geom.Vec2(1, 0);
+  this.mass               = 1.0;
+  this.friction           = 0.0; // This object's surface's friction
+  this.restitution        = 0.0; // This object's surface's bounciness
+  this.solid              = true;
+  this.fixed              = false;
+  this.allowOverlapEvents = false;
   
   // If false, the collision vertices in this game object's frame objects
   // will not rotate with the forward
@@ -35,6 +36,9 @@ var PhysicsObject = function () {
   this.collisionDisplacementSum   = new geom.Vec2();
   this.collisionSurfaceImpulseSum = new geom.Vec2();
   this.collisionMomentumSum       = new geom.Vec2();
+  
+  this._previousPosition = new geom.Vec2();
+  this._previousVelocity = new geom.Vec2();
   
   // Calculated axes for (narrow phase) collision's Separating Axis Test.
   // Set to null when:
@@ -57,9 +61,17 @@ Object.defineProperties(PhysicsObject, {
   },
   
   ROUNDING_ANGLE_INCREMENT: {
-    // 32 is TOTAL_DISPLAY_ANGLES, but a literal is needed since
+    // 32 is TOTAL_DISPLAY_ANGLES, but the literal is needed since
     // defineProperties hasn't finished yet
     value: 2 * Math.PI / 32 
+  },
+  
+  COSINE_ANGLE_CACHE: {
+    value: []
+  },
+  
+  SINE_ANGLE_CACHE: {
+    value: []
   },
   
   // During narrow phase of collision detection, the object's position may need
@@ -67,7 +79,7 @@ Object.defineProperties(PhysicsObject, {
   // another object some time between this frame and the previous. This is the
   // upper limit for the number of those samples.
   MAX_COLLISION_MULTI_SAMPLE_COUNT : {
-    value: 5
+    value: 6
   },
   
   // PhysicsObjects can only adjust their position's x or y if they have moved
@@ -84,7 +96,13 @@ Object.defineProperties(PhysicsObject, {
   // The minimum displacement needed to move. If it's less than the slop, the
   // displacement is treated as 0
   COLLISION_DISPLACEMENT_SLOP: {
-    value: 0.1
+    value: 0.0001
+  },
+  
+  // The minimum velocity needed to move. If it's less than the slop, the
+  // displacement is treated as 0
+  COLLISION_VELOCITY_SLOP: {
+    value: 0.00001
   }
 });
 
@@ -132,30 +150,57 @@ PhysicsObject.prototype = Object.freeze(Object.create(GameObject.prototype, {
   getDisplayAngle: {
     value: function (angle) {
       return Math.round(angle / PhysicsObject.ROUNDING_ANGLE_INCREMENT) *
-             PhysicsObject.ROUNDING_ANGLE_INCREMENT;
+        PhysicsObject.ROUNDING_ANGLE_INCREMENT;
     }
   },
 
   update: {
     value: function (dt) {
-      // Limit acceleration to max acceleration
-      this.acceleration.limit(this.maxAcceleration);
+      if (!this.fixed)  {
+        // Apply an acceleration matching the displayed direction for the 
+        // physics object
+        var accelerationAngle =
+            Math.atan2(this.acceleration._y, this.acceleration._x);
+        var displayAccelerationAngle =
+            this.getDisplayAngle(accelerationAngle);
+        var accelerationMag = Math.sqrt(
+          this.acceleration._x * this.acceleration._x +
+          this.acceleration._y * this.acceleration._y
+        );
+
+        // Limit acceleration to max acceleration
+        if (accelerationMag > this.maxAcceleration) {
+          this.acceleration._x *= this.maxAcceleration / accelerationMag;
+          this.acceleration._y *= this.maxAcceleration / accelerationMag;
+          accelerationMag = this.maxAcceleration;
+        }
+
+        this.velocity._x +=
+          PhysicsObject.COSINE_ANGLE_CACHE[displayAccelerationAngle] *
+          accelerationMag * dt;
+        this.velocity._y += 
+          PhysicsObject.SINE_ANGLE_CACHE[displayAccelerationAngle] *
+          accelerationMag * dt;
+
+        var velocityMagRef =
+            this.velocity._x * this.velocity._x +
+            this.velocity._y * this.velocity._y;
+
+        // Limit velocity to max speed
+        if (velocityMagRef > this.maxSpeed * this.maxSpeed) {
+          velocityMagRef = Math.sqrt(velocityMagRef); 
+          this.velocity._x *= this.maxSpeed / velocityMagRef;
+          this.velocity._y *= this.maxSpeed / velocityMagRef;
+        }
+
+        // Apply the current velocity
+        this._previousPosition._x = this.transform.position._x;
+        this._previousPosition._y = this.transform.position._y;
+        this.transform.position._x += this.velocity._x * dt;
+        this.transform.position._y += this.velocity._y * dt;
+      }
       
-      // Apply an acceleration matching the displayed direction for the physics object
-      var displayAccelerationAngle = this.getDisplayAngle(this.acceleration.getAngle());
-      var accelerationMag          = this.acceleration.getMagnitude();
-
-      this.velocity._x += Math.cos(displayAccelerationAngle) * accelerationMag * dt;
-      this.velocity._y += Math.sin(displayAccelerationAngle) * accelerationMag * dt;
-
-      // Limit velocity to max speed
-      this.velocity.limit(this.maxSpeed);
-
-      // Apply the current velocity
-      this.transform.position._x += this.velocity._x * dt;
-      this.transform.position._y += this.velocity._y * dt;
-
-      this.transform.rotation = this.forward.getAngle();
+      this.transform.rotation = Math.atan2(this.forward._y, this.forward._x);
       
       // Optimization: Includes GameObject's update() via copypaste to prevent
       // Function.prototype.call()
@@ -172,12 +217,12 @@ PhysicsObject.prototype = Object.freeze(Object.create(GameObject.prototype, {
       var otherCache = physObj.calculationCache;
 
       // Specifically, check if the two object's AABBs are overlapping
-      var thisHalfW = cache.aabbWidth  * 0.5;
-      var thisHalfH = cache.aabbHeight * 0.5;
+      var thisHalfW = cache.aabbHalfWidth;
+      var thisHalfH = cache.aabbHalfHeight;
       var thisX     = cache.x;
       var thisY     = cache.y;
-      var thatHalfW = otherCache.aabbWidth  * 0.5;
-      var thatHalfH = otherCache.aabbHeight * 0.5;
+      var thatHalfW = otherCache.aabbHalfWidth;
+      var thatHalfH = otherCache.aabbHalfHeight;
       var thatX     = otherCache.x;
       var thatY     = otherCache.y;
       
@@ -189,19 +234,12 @@ PhysicsObject.prototype = Object.freeze(Object.create(GameObject.prototype, {
   },
   
   checkNarrowPhaseCollision: {
-    value: function (physObj, collisionData) {
+    value: function (physObj, collisionData = {}) {
       var cache             = this.calculationCache;
       var otherCache        = physObj.calculationCache;
       var axes              = this._satGetAxes().concat(physObj._satGetAxes());
       var smallestOverlap   = Infinity;
       var smallestAxis      = null;
-      var velocityDirection = this.velocity.clone().normalize();
-      
-      // Only axes that are opposite direction of the velocity should be
-      // considered
-      /*axes = axes.filter((axis) =>
-        velocityDirection._x * axis.x + velocityDirection._y * axis.y <= 0
-      );*/
       
       for (var i = 0; i < axes.length; i++) {
         var axis        = axes[i];
@@ -242,7 +280,6 @@ PhysicsObject.prototype = Object.freeze(Object.create(GameObject.prototype, {
       var dotProductWithSmallestAxis =
           displacement.x * smallestAxis.x +
           displacement.y * smallestAxis.y;
-      
       if (dotProductWithSmallestAxis < 0) {
         smallestAxis.x *= -1;
         smallestAxis.y *= -1;
@@ -250,6 +287,154 @@ PhysicsObject.prototype = Object.freeze(Object.create(GameObject.prototype, {
       
       collisionData.colliding = true;
       collisionData.direction = smallestAxis;
+      
+      // If the width and height are equal, the next calculations are
+      // unnecessary
+      if (cache.width === cache.height) {
+        return true;
+      }
+      
+      // Get alternate separating direction for thin objects
+      var velocityMagnitudeSquared = this.velocity.getMagnitudeSquared();
+      var prev                     = this._previousPosition;
+      var cur                      = this.transform.position;
+      var closestDistToPrev        = Infinity;
+      var closestDistToCur         = Infinity;
+      var closestToPrev            = null;
+      var closestToCur             = null;
+      
+      // Find the 2 vertices on physObj that are closest to this object's
+      // current and past position
+      for (let v of physObj.vertices) {
+        var vert = v.clone().add(physObj.position);
+        vert.prev = v.prev;
+        vert.next = v.next;
+        var prevDist = geom.Vec2.subtract(vert, prev).getMagnitudeSquared();
+        var curDist = geom.Vec2.subtract(vert, cur).getMagnitudeSquared();
+        
+        if (prevDist < closestDistToPrev) {
+          closestDistToPrev = prevDist;
+          closestToPrev = vert;
+        }
+        
+        if (curDist < closestDistToCur) {
+          closestDistToCur = curDist;
+          closestToCur = vert;
+        }
+      }
+      
+      // If the closest point is farther away than the length of the velocity,
+      // there's no way this object could have moved to that point since the
+      // last update. So, the collision with that point is invalid.
+      if (closestDistToCur > this.velocity.getMagnitudeSquared()) {
+        closestDistToCur  = null;
+        closestToPrev     = null;
+        closestDistToPrev = Infinity;
+        closestDistToCur  = Infinity;
+      }
+      
+      // If the vertices are different, make an edge out of them and use that
+      // edge's normal as the separating normal
+      if (closestToPrev !== closestToCur) {
+        var p0 = null;
+        var p1 = null;
+        
+        if (closestToCur.prev === closestToPrev) {
+          var v = geom.Vec2.subtract(closestToCur, closestToPrev)
+            .normalize()
+            .getOrthogonal();
+          collisionData.direction = {
+            x: -v._x,
+            y: -v._y
+          };
+        } else if (closestToCur.next === closestToPrev) {
+          var v = geom.Vec2.subtract(closestToPrev, closestToCur)
+            .normalize()
+            .getOrthogonal();
+          collisionData.direction = {
+            x: -v._x,
+            y: -v._y
+          };
+        }
+      
+      // If they are the same point and this object contains that point, use
+      // this velocity to find the separating normal
+      } else if (closestToCur) {
+        var displacementDirection =
+            new geom.Vec2(displacement.x, displacement.y).normalize();
+        /**
+         * TODO: Clean this up
+         * Determine which edge is most perpendicular to the separation normal,
+         * left edge or right edge?
+         */
+        var prev = closestToCur.prev.clone().add(physObj.position);
+        var next = closestToCur.next.clone().add(physObj.position);
+
+        var leftNormal =
+            geom.Vec2.subtract(closestToCur, prev).getOrthogonal().normalize();
+        var rightNormal =
+            geom.Vec2.subtract(next, closestToCur).getOrthogonal().normalize();
+        var leftDot  = geom.Vec2.dot(leftNormal,  displacementDirection);
+        var rightDot = geom.Vec2.dot(rightNormal, displacementDirection);
+
+        var tooClose = Math.abs(leftDot - rightDot) < 0.0015;
+
+        // If the left and right normals are roughly the same angle apart from
+        // the displacement direction, assume a corner has been hit
+        if (tooClose) {
+          collisionData.forceUndo = true;
+
+          var dotProductWithVelocityDirection =
+              displacement.x * displacementDirection.x +
+              displacement.y * displacementDirection.y;
+          if (dotProductWithVelocityDirection > 0) {
+            displacementDirection.x *= -1;
+            displacementDirection.y *= -1;
+          }
+          collisionData.direction = displacementDirection;
+        
+        // Otherwise use the edge that is most in the direction opposite of
+        // displacement
+        } else {
+          var leftIsMoreNegative = leftDot <= rightDot;
+          var velocityDirection  = this.velocity.clone().normalize();
+
+          // Use the edge that is most perpendicular to the separation normal,
+          // keeping winding direction (clockwise) in mind
+          if (leftDot < 0 && leftIsMoreNegative) {
+            collisionData.direction = {
+              x: -leftNormal.x,
+              y: -leftNormal.y
+            };
+            collisionData.altDirection = {
+              x: -velocityDirection.x,
+              y: -velocityDirection.y,
+            };
+            collisionData.altBestEdge = {
+              maxProjectionVertex: closestToCur,
+              v0:                  prev,
+              v1:                  closestToCur,
+              success:             true
+            };
+          } else if (rightDot < 0) {
+            collisionData.direction = {
+              x: -rightNormal.x,
+              y: -rightNormal.y
+            };
+            collisionData.altDirection = {
+              x: -velocityDirection.x,
+              y: -velocityDirection.y,
+            };
+            collisionData.altBestEdge = {
+              maxProjectionVertex: closestToCur,
+              v0:                  closestToCur,
+              v1:                  next,
+              success:             true
+            };
+          }
+        }
+      }
+      
       return true;
     }
   },
@@ -259,6 +444,10 @@ PhysicsObject.prototype = Object.freeze(Object.create(GameObject.prototype, {
       var collisionData = {
         colliding:     false,
         direction:     null,
+        altDirection:  null,
+        bestEdge:      null,
+        altBestEdge:   null,
+        forceUndo:     false,
         contactPoint:  null,
         edgeDirection: null
       };
@@ -268,41 +457,58 @@ PhysicsObject.prototype = Object.freeze(Object.create(GameObject.prototype, {
       if (this.checkBroadPhaseCollision(physObj)) {
         // Perform multi-sampling on the narrow phase to increment this object
         // to its future position and see if it collides along the way
-        var cache             = this.calculationCache;
-        var otherCache        = physObj.calculationCache;
-        var curVelocity       = 
-            this.velocity.clone().add(this.collisionSurfaceImpulseSum);
-        var velocityMag       = curVelocity.getMagnitude();
-        var sampleCount       = 1;
-        var velocityIncrement = new geom.Vec2();
+        var cache                = this.calculationCache;
+        var otherCache           = physObj.calculationCache;
+        var sampleCount          = 1;
+        var velocityIncrement    = {x: 0, y: 0};
+        var velocityIncrementMag = 1;
+        var velocityMag          = Math.sqrt(
+          cache.vx * cache.vx + cache.vy * cache.vy
+        );
         
         if (velocityMag !== 0) {
-          var velocityDirection   = curVelocity.clone().normalize();
+          var velocityDirection = {
+            x: cache.vx / velocityMag,
+            y: cache.vy / velocityMag
+          };
           var smallestSide        = Math.min(cache.width * 0.5, cache.height * 0.5);
-          var possibleSampleCount = Math.ceil(velocityMag / smallestSide);
-          var sampleCount         = 1 + Math.min(
+          var possibleSampleCount = 1 + Math.ceil(velocityMag / smallestSide);
+          var sampleCount         = Math.min(
             possibleSampleCount,
             PhysicsObject.MAX_COLLISION_MULTI_SAMPLE_COUNT
           );
-          var velocityIncrement   = velocityDirection.multiply(
-            velocityMag / sampleCount
-          );
+          velocityIncrementMag = velocityMag / sampleCount;
+          velocityIncrement.x  = velocityDirection.x * velocityIncrementMag;
+          velocityIncrement.y  = velocityDirection.y * velocityIncrementMag;
           
           // Move this object back to where it was last frame and slowly move
           // it to its current position until a collision is found (if any)
-          this.transform.position._x -= curVelocity._x;
-          this.transform.position._y -= curVelocity._y;
+          this.transform.position._x -= cache.vx;
+          this.transform.position._y -= cache.vy;
           cache.x = this.transform.position._x;
           cache.y = this.transform.position._y;
         }
         
         for (var i = 0; i < sampleCount; i++) {
-          this.transform.position._x += velocityIncrement._x;
-          this.transform.position._y += velocityIncrement._y;
+          this.transform.position._x += velocityIncrement.x;
+          this.transform.position._y += velocityIncrement.y;
           cache.x = this.transform.position._x;
           cache.y = this.transform.position._y;
           
           if (this.checkNarrowPhaseCollision(physObj, collisionData)) {
+            if (collisionData.forceUndo) {
+              this.transform.position._x -= velocityIncrement.x;
+              this.transform.position._y -= velocityIncrement.y;
+              cache.x = this.transform.position._x;
+              cache.y = this.transform.position._y;
+              collisionData.contactPoint = {
+                x: 0,
+                y: 0,
+                depth: velocityIncrementMag
+              };
+              return collisionData;
+            }
+            
             var maxDepth         = -Infinity;
             var bestContactPoint = null;
             var contactManifold  =
@@ -314,28 +520,63 @@ PhysicsObject.prototype = Object.freeze(Object.create(GameObject.prototype, {
                 bestContactPoint = point;
               }
             }
+            
+            // If no contact point was found, try to find one using the
+            // alternate separation normal
+            if (!bestContactPoint && collisionData.altDirection) {
+              // Swap the direction and alt direction from the collision data
+              // so findContactManifold() uses the new direction
+              var collisionDataAlt = {
+                colliding:     collisionData.colliding,
+                direction:     collisionData.altDirection,
+                altDirection:  collisionData.direction,
+                bestEdge:      collisionData.altBestEdge,
+                altBestEdge:   collisionData.bestEdge,
+                forceUndo:     collisionData.forceUndo,
+                contactPoint:  collisionData.contactPoint,
+                edgeDirection: collisionData.edgeDirection
+              };
+              var contactManifoldAlt =
+                  this.findContactManifold(physObj, collisionDataAlt);
+              
+              for (let point of contactManifoldAlt) {
+                if (point.depth > maxDepth) {
+                  maxDepth = point.depth;
+                  bestContactPoint = point;
+                }
+              }
+            }
 
             if (bestContactPoint) {
-              var restitution       = this.restitution * physObj.restitution;
-              var friction          = (this.friction + physObj.friction) * 0.5;
-              var edge              = collisionData.edgeDirection.clone();
-              var parallelComponent =
-                  geom.Vec2.dot(edge, this.acceleration) * (1 - friction);
-              var impulse           = edge.multiply(parallelComponent);
-              
-              if (physObj.fixed) {
-                this.collisionSurfaceImpulseSum._x += impulse._x;
-                this.collisionSurfaceImpulseSum._y += impulse._y;
-              } else {
-                this.collisionSurfaceImpulseSum._x += impulse._x / this.mass;
-                this.collisionSurfaceImpulseSum._y += impulse._y / this.mass;
-                physObj.collisionSurfaceImpulseSum._x -=
-                  impulse._x / physObj.mass;
-                physObj.collisionSurfaceImpulseSum._y -=
-                  impulse._y / physObj.mass;
-              }
-              
               collisionData.contactPoint = bestContactPoint;
+              
+              // Only determine an impulse with the physic object's surface if
+              // there's a collision with an edge. If there's only a point (aka
+              // no edge direction), then there's no edge to "slide" against.
+              if (collisionData.edgeDirection) {
+                var restitution       = this.restitution * physObj.restitution;
+                var friction          = (this.friction + physObj.friction) * 0.5;
+                var edge              = {
+                  x: collisionData.edgeDirection.x,
+                  y: collisionData.edgeDirection.y
+                };
+                var edgeDotVelocity   = edge.x * cache.vx + edge.y * cache.vy;
+                var parallelComponent = edgeDotVelocity * (1 - friction);
+                
+                // Multiply edge by parallel component to calculate impulse
+                edge.x *= parallelComponent;
+                edge.y *= parallelComponent;
+
+                if (physObj.fixed) {
+                  this.collisionSurfaceImpulseSum._x += edge.x;
+                  this.collisionSurfaceImpulseSum._y += edge.y;
+                } else {
+                  this.collisionSurfaceImpulseSum._x += edge.x / this.mass;
+                  this.collisionSurfaceImpulseSum._y += edge.y / this.mass;
+                  physObj.collisionSurfaceImpulseSum._x -= edge.x / physObj.mass;
+                  physObj.collisionSurfaceImpulseSum._y -= edge.y / physObj.mass;
+                }
+              }
               break;
             }
           }
@@ -361,7 +602,10 @@ PhysicsObject.prototype = Object.freeze(Object.create(GameObject.prototype, {
         return [];
       }
       
-      var clippedPoints = [];
+      var referenceEdge    = null;
+      var incidentEdge     = null;
+      var refEdgeDirection = null;
+      var clippedPoints    = [];
       var separationNormal = new geom.Vec2(
         collisionData.direction.x,
         collisionData.direction.y
@@ -378,11 +622,76 @@ PhysicsObject.prototype = Object.freeze(Object.create(GameObject.prototype, {
       // calculating the best edge in physObj
       separationNormal.multiply(-1);
       
-      var otherBestEdge =
+      var otherBestEdge = collisionData.bestEdge ||
           physObj._findContactManifoldBestEdge(separationNormal);
       
       // Undo the flip from before
       separationNormal.multiply(-1);
+      
+      /**
+       * If a best edge was not found, check if a corner was hit instead of an
+       * edge
+       */
+      if (!bestEdge.success && otherBestEdge.success) {
+        var t = otherBestEdge;
+        otherBestEdge = bestEdge;
+        bestEdge = t;
+      }
+      
+      // No best edge or corner, so fail early
+      if (!bestEdge.success && !otherBestEdge.success) {
+        return [];
+      }
+      
+      // A best corner was hit, so use that as the contact point
+      if (!otherBestEdge.success) {
+        referenceEdge = bestEdge;
+        refEdgeDirection = geom.Vec2.subtract(
+          referenceEdge.v1,
+          referenceEdge.v0
+        ).normalize();
+        
+        // Clip what's past the reference edge's normal
+        var refEdgeNormal = refEdgeDirection.getOrthogonal();
+
+        // Flip the normal to point from referenceEdge to incidentEdge
+        refEdgeNormal.multiply(-1);
+
+        var maxDepth = geom.Vec2.dot(
+          refEdgeNormal,
+          referenceEdge.maxProjectionVertex
+        );
+
+        var v = otherBestEdge.maxProjectionVertex;
+        
+        // Calculate depths for the clipped points
+        v.depth = geom.Vec2.dot(refEdgeNormal, v) - maxDepth;
+        
+        // If one object found a best edge, use that edge's direction as the
+        // edge direction for the collision
+        if (bestEdge.success) {
+          var velocityDirection = this.velocity.clone().normalize();
+
+          collisionData.edgeDirection = geom.Vec2.subtract(
+            bestEdge.v1,
+            bestEdge.v0
+          ).normalize();
+
+          // Flip the edge direction if it's opposite from the velocity. This is to ensure winding order is correct
+          if (geom.Vec2.dot(collisionData.edgeDirection, velocityDirection) < 0) {
+            collisionData.edgeDirection.multiply(-1);
+          
+          // Otherwise flip it orthogonally (???)
+          } else {
+            var x = collisionData.edgeDirection._x;
+            var y = collisionData.edgeDirection._y;
+            collisionData.edgeDirection._x = -y;
+            collisionData.edgeDirection._y = x;
+          }
+        }
+        
+        return [v];
+      }
       
       /**
        * -- STEP 2 --
@@ -390,11 +699,8 @@ PhysicsObject.prototype = Object.freeze(Object.create(GameObject.prototype, {
        * edge.
        *
        * If this bestEdge is more perpendicular than physObj's, bestEdge
-       * is the reference edge. Otherwise physObj's is, and we should mark the
-       * "flip" flag as true.
+       * is the reference edge. Otherwise physObj's is.
        */
-      var referenceEdge = null;
-      var incidentEdge  = null;
       var e1DotN        = geom.Vec2.dot(
         geom.Vec2.subtract(bestEdge.v1, bestEdge.v0),
         separationNormal
@@ -416,7 +722,7 @@ PhysicsObject.prototype = Object.freeze(Object.create(GameObject.prototype, {
        * -- STEP 3 --
        * Clip points to find contact manifold
        */
-      var refEdgeDirection = geom.Vec2.subtract(
+      refEdgeDirection = geom.Vec2.subtract(
         referenceEdge.v1,
         referenceEdge.v0
       ).normalize();
@@ -455,8 +761,6 @@ PhysicsObject.prototype = Object.freeze(Object.create(GameObject.prototype, {
       refEdgeDirection.multiply(-1);
       
       // Clip what's past the reference edge's normal
-      // If we had to flip the incident and reference edges before, then we
-      // need to flip the reference edge normal to clip properly
       var refEdgeNormal = refEdgeDirection.getOrthogonal();
 
       // Flip the normal to point from referenceEdge to incidentEdge
@@ -491,19 +795,20 @@ PhysicsObject.prototype = Object.freeze(Object.create(GameObject.prototype, {
       
       // If there are any contact points, store the edge's direction
       if (contactManifold.length > 0) {
+        var bestEdgeDirection = geom.Vec2.subtract(
+          bestEdge.v1,
+          bestEdge.v0
+        ).normalize();
+        
         collisionData.edgeDirection = geom.Vec2.subtract(
-          clippedPoints[1],
-          clippedPoints[0]
+          otherBestEdge.v1,
+          otherBestEdge.v0
         ).normalize();
         
-        var incEdgeDirection = geom.Vec2.subtract(
-          incidentEdge.v1,
-          incidentEdge.v0
-        ).normalize();
-        
-        // Flip the edge direction if it's opposite from the incident edge's
-        // direction. This is to ensure winding order is correct
-        if (geom.Vec2.dot(collisionData.edgeDirection, incEdgeDirection) < 0) {
+        // Flip the edge direction if it's opposite from the velocity.
+        // This is to ensure the edge is always pointing in the direction the
+        // object is going.
+        if (geom.Vec2.dot(collisionData.edgeDirection, this.velocity) < 0) {
           collisionData.edgeDirection.multiply(-1);
         }
       }
@@ -547,12 +852,24 @@ PhysicsObject.prototype = Object.freeze(Object.create(GameObject.prototype, {
       var prev = farthestVertex.prev;
       var next = farthestVertex.next;
       
-      var left  = geom.Vec2.subtract(farthestVertex, prev).normalize();
-      var right = geom.Vec2.subtract(farthestVertex, next).normalize();
+      var left     = geom.Vec2.subtract(farthestVertex, prev).normalize();
+      var right    = geom.Vec2.subtract(farthestVertex, next).normalize();
+      var leftDot  = geom.Vec2.dot(left,  separationNormal);
+      var rightDot = geom.Vec2.dot(right, separationNormal);
       
-      var leftIsMorePerpendicular =
-        geom.Vec2.dot(left,  separationNormal) <=
-        geom.Vec2.dot(right, separationNormal);
+      var tooClose = Math.abs(leftDot - rightDot) < 0.0015;
+      
+      // If the left and right are roughly the same angle apart from the
+      // separation direction, assume a corner has been hit and mark success as
+      // false since no best "edge" was found.
+      if (tooClose) {
+        return {
+          maxProjectionVertex: farthestVertex.clone().add(this.position),
+          success:             false
+        };
+      }
+      
+      var leftIsMorePerpendicular = leftDot <= rightDot;
       
       // Return the edge that is most perpendicular to the separation normal,
       // keeping winding direction (clockwise) in mind
@@ -560,13 +877,15 @@ PhysicsObject.prototype = Object.freeze(Object.create(GameObject.prototype, {
         return {
           maxProjectionVertex: farthestVertex.clone().add(this.position),
           v0:                  prev.clone().add(this.position),
-          v1:                  farthestVertex.clone().add(this.position)
+          v1:                  farthestVertex.clone().add(this.position),
+          success:             true
         };
       } else {
         return {
           maxProjectionVertex: farthestVertex.clone().add(this.position),
           v0:                  farthestVertex.clone().add(this.position),
-          v1:                  next.clone().add(this.position)
+          v1:                  next.clone().add(this.position),
+          success:             true
         };
       }
     }
@@ -612,69 +931,65 @@ PhysicsObject.prototype = Object.freeze(Object.create(GameObject.prototype, {
    */
   resolveCollisions: {
     value: function () {
-      // Project the acceleration on the direction of the collision impulse
-      // Experimental functionality: Is this needed?
-      var impulseSumDirection  = 
-        this.collisionSurfaceImpulseSum.clone().normalize();
-      var accelerationDotDirection = geom.Vec2.dot(
-        this.acceleration, impulseSumDirection
-      );
-      var ax = impulseSumDirection._x * accelerationDotDirection;
-      var ay = impulseSumDirection._y * accelerationDotDirection;
-      this.acceleration._x = ax;
-      this.acceleration._y = ay;
-      this.calculationCache.ax = ax;
-      this.calculationCache.ay = ay;
-      
-      // Calculate new velocity based on momentum calculations and surface
-      // physics (friction & restitution)
-      // Note: Adjusted acceleration (above) is added for fun(???)
-      var newVelocityDotDirection = geom.Vec2.dot(
-        this.collisionMomentumSum, impulseSumDirection
-      );
-      var vx = impulseSumDirection._x * newVelocityDotDirection;
-      var vy = impulseSumDirection._y * newVelocityDotDirection;
-      this.velocity._x =
-        this.collisionMomentumSum._x + this.collisionSurfaceImpulseSum._x + ax;
-      this.velocity._y = 
-        this.collisionMomentumSum._y + this.collisionSurfaceImpulseSum._y + ay;
-      this.calculationCache.vx = 
-        this.collisionMomentumSum._x + this.collisionSurfaceImpulseSum._x + ax;
-      this.calculationCache.vy = 
-        this.collisionMomentumSum._y + this.collisionSurfaceImpulseSum._y + ay;
-      
-      // Snap to the next integer so that objects can move smoothly after
-      // colliding
       var dx = this.collisionDisplacementSum._x;
       var dy = this.collisionDisplacementSum._y;
-      
-      if (dx < 0) dx = Math.floor(dx);
-      else        dx = Math.ceil(dx);
-      if (dy < 0) dy = Math.floor(dy);
-      else        dy = Math.ceil(dy);
-      
-      dx *= PhysicsObject.COLLISION_DISPLACEMENT_PERCENTAGE_CORRECTION;
-      dy *= PhysicsObject.COLLISION_DISPLACEMENT_PERCENTAGE_CORRECTION;
-      
-      if (Math.abs(dx) < PhysicsObject.COLLISION_DISPLACEMENT_SLOP) dx = 0;
-      if (Math.abs(dy) < PhysicsObject.COLLISION_DISPLACEMENT_SLOP) dy = 0;
+      var resolutionAllowed =
+          Math.abs(dx) >= PhysicsObject.COLLISION_DISPLACEMENT_SLOP ||
+          Math.abs(dy) >= PhysicsObject.COLLISION_DISPLACEMENT_SLOP;
 
-      this.transform.position._x += dx;
-      this.calculationCache.x += dx;
+      if (!this.fixed && resolutionAllowed) {
+        // Project the acceleration on the direction of the collision impulse
+        // Experimental functionality: Is this needed?
+        var impulseSumDirection  = 
+          this.collisionSurfaceImpulseSum.clone().normalize();
+        var accelerationDotDirection = geom.Vec2.dot(
+          this.acceleration, impulseSumDirection
+        );
+        var ax = impulseSumDirection._x * accelerationDotDirection;
+        var ay = impulseSumDirection._y * accelerationDotDirection;
+        this.acceleration._x = ax;
+        this.acceleration._y = ay;
+        this.calculationCache.ax = ax;
+        this.calculationCache.ay = ay;
 
-      this.transform.position._y += dy;
-      this.calculationCache.y += dy;
+        // Calculate new velocity based on momentum calculations and surface
+        // physics (friction & restitution)
+        var vx =
+          this.collisionMomentumSum._x + this.collisionSurfaceImpulseSum._x;
+        var vy = 
+          this.collisionMomentumSum._y + this.collisionSurfaceImpulseSum._y;
+
+        if (Math.abs(vx) < PhysicsObject.COLLISION_VELOCITY_SLOP) vx = 0;
+        if (Math.abs(vy) < PhysicsObject.COLLISION_VELOCITY_SLOP) vy = 0;
+
+        this.velocity._x = vx
+        this.velocity._y = vy
+        this.calculationCache.vx = vx
+        this.calculationCache.vy = vy
+
+        this.transform.position._x += dx;
+        this.calculationCache.x += dx;
+
+        this.transform.position._y += dy;
+        this.calculationCache.y += dy;
+      }
       
-      if (this.velocity.getMagnitude() < 0.001) this.velocity.multiply(0);
+      this.collisionDisplacementSum.multiply(0);
+      this.collisionSurfaceImpulseSum.multiply(0);
+      this.collisionMomentumSum.multiply(0);
     }
   },
   
-  onCollide: {
+  onOverlap: {
     value: function (physObj) {}
   },
   
+  onCollide: {
+    value: function (physObj, collisionData) {}
+  },
+  
   canCollide: {
-    value: function (physObj) {
+    value: function (physObj, collisionData) {
       return true;
     }
   },
@@ -784,8 +1099,8 @@ PhysicsObject.prototype = Object.freeze(Object.create(GameObject.prototype, {
       // Optimization: Includes GameObject's cacheCalculations() via copypaste
       // to prevent call()
       var position     = this.transform.position;
-      var width        = this.scale.x * this.getLocalBounds().width;
-      var height       = this.scale.y * this.getLocalBounds().height;
+      var width        = this._cachedWidth;
+      var height       = this._cachedHeight;
       var velocity     = this.velocity;
       var acceleration = this.acceleration;
       var rotation     = this.transform.rotation;
@@ -796,6 +1111,8 @@ PhysicsObject.prototype = Object.freeze(Object.create(GameObject.prototype, {
 
       this.calculationCache.x          = position._x;
       this.calculationCache.y          = position._y;
+      this.calculationCache.px         = this._previousPosition._x;
+      this.calculationCache.py         = this._previousPosition._y;
       this.calculationCache.width      = width;
       this.calculationCache.height     = height;
       this.calculationCache.vx         = velocity._x;
@@ -809,6 +1126,10 @@ PhysicsObject.prototype = Object.freeze(Object.create(GameObject.prototype, {
       this.calculationCache.aabbHeight =
         absCosRotation * height +
         absSinRotation * width;
+      this.calculationCache.aabbHalfWidth =
+        this.calculationCache.aabbWidth * 0.5;
+      this.calculationCache.aabbHalfHeight =
+        this.calculationCache.aabbHeight * 0.5;
     }
   },
   
@@ -869,9 +1190,6 @@ PhysicsObject.prototype = Object.freeze(Object.create(GameObject.prototype, {
     }
   },
   
-  /**
-   * (Optimization) Copied from GameObject to prevent a .call()
-   */
   _setSprite: {
     value: function (sprite) {
       // Don't do anything if this sprite is already added
@@ -889,9 +1207,13 @@ PhysicsObject.prototype = Object.freeze(Object.create(GameObject.prototype, {
       if (sprite) {
         this.addChild(sprite);
         this._prevSprite = sprite;
+        this._cachedWidth  = sprite.width;
+        this._cachedHeight = sprite.height;
       } else {
         this.width  = 0;
         this.height = 0;
+        this._cachedWidth  = 0;
+        this._cachedHeight = 0;
       }
       
       // Reset SAT Axes
@@ -900,6 +1222,14 @@ PhysicsObject.prototype = Object.freeze(Object.create(GameObject.prototype, {
   }
 }));
 
-Object.freeze(PhysicsObject);
+// Cache Math.cos and Math.sin for the possible display angles
+for (var i = 0; i <= PhysicsObject.TOTAL_DISPLAY_ANGLES; i++) {
+  var angle =
+      Math.PI * 2 * (i / PhysicsObject.TOTAL_DISPLAY_ANGLES) - Math.PI;
+  angle = PhysicsObject.prototype.getDisplayAngle.call(null, angle);
+  
+  PhysicsObject.COSINE_ANGLE_CACHE[angle] = Math.cos(angle);
+  PhysicsObject.SINE_ANGLE_CACHE[angle]   = Math.sin(angle);
+}
 
 module.exports = PhysicsObject;

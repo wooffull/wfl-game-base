@@ -107,21 +107,21 @@ Quadtree.prototype = Object.freeze(Object.create(Quadtree.prototype, {
         value : function (physObj) {
             var calculationCache   = physObj.calculationCache;
             var index              = -1;
-            var verticalMidpoint   = this.bounds.x + (this.bounds.width  >> 1);
-            var horizontalMidpoint = this.bounds.y + (this.bounds.height >> 1);
-            var w                  = calculationCache.aabbWidth;
-            var h                  = calculationCache.aabbHeight;
+            var verticalMidpoint   = this.bounds.x + (this.bounds.width  * 0.5);
+            var horizontalMidpoint = this.bounds.y + (this.bounds.height * 0.5);
+            var w                  = calculationCache.aabbHalfWidth;
+            var h                  = calculationCache.aabbHalfHeight;
             var x                  = calculationCache.x;
             var y                  = calculationCache.y;
 
             // Object completely fits within top quadrants
-            var topQuadrant = (y + (h >> 1) < horizontalMidpoint);
+            var topQuadrant = (y + h < horizontalMidpoint);
 
             // Object completely fits within bottom quadrants
-            var bottomQuadrant = (y - (h >> 1) > horizontalMidpoint);
+            var bottomQuadrant = (y - h > horizontalMidpoint);
 
             // Object completely fits within left quadrants
-            if (x + (w >> 1) < verticalMidpoint) {
+            if (x + w < verticalMidpoint) {
                 if (topQuadrant) {
                     index = 1;
                 } else if (bottomQuadrant) {
@@ -131,7 +131,7 @@ Quadtree.prototype = Object.freeze(Object.create(Quadtree.prototype, {
                 }
 
             // Object completely fits within right quadrants
-            } else if (x - (w >> 1) > verticalMidpoint) {
+            } else if (x - w > verticalMidpoint) {
                 if (topQuadrant) {
                     index = 0;
                 } else if (bottomQuadrant) {
@@ -182,7 +182,6 @@ Quadtree.prototype = Object.freeze(Object.create(Quadtree.prototype, {
 
                     if (curObj === undefined) {
                         this.objects.splice(i, 1);
-                        i++;
                     } else {
                         var index = this.getIndex(curObj);
 
@@ -232,7 +231,7 @@ Quadtree.prototype = Object.freeze(Object.create(Quadtree.prototype, {
                     this.nodes[index].retrieve(objs, physObj);
                 }
             }
-
+          
             objs.push.apply(objs, this.objects);
 
             return objs;

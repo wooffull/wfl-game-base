@@ -7,6 +7,7 @@ const datastructure = require('../datastructure');
 const geom          = require('../geom');
 const cameras       = require('./cameras');
 const backgrounds   = require('./backgrounds');
+const PhysicsObject = require('../core/entities');
 
 var Scene = function (canvas) {
   this._stage = new PIXI.Container();
@@ -32,12 +33,18 @@ var Scene = function (canvas) {
     maxY:     -Infinity,
     forceCalc: false
   };
-  
-  // Holds object IDs if they've been in a collision and need to resolve
-  this._collisionObjectCache = [];
 
   // List of objects that have been in a collision and need to resolve
   this._collisionObjects = [];
+  
+  // Holds object IDs if they've been in a collision and need to resolve
+  this._collisionObjectCache = {};
+  
+  // Cache of distances from obj0 to obj0, where the key is
+  // obj0.wflId + "_" + obj01.wflId
+  this._distancePairCache  = {};
+  this._quadtreeCache      = {};
+  this._collisionPairCache = {};
 
   this.canvas              = canvas;
   this.camera              = new cameras.Camera();
@@ -195,17 +202,15 @@ Scene.prototype = Object.freeze(Object.create(Scene.prototype, {
   
   canSee : {
     value : function (obj) {
-      var cache      = obj.calculationCache;
-      var halfWidth  = cache.aabbWidth  >> 1;
-      var halfHeight = cache.aabbHeight >> 1;
-      var objOffsetX = cache.x - this.camera.position.x;
-      var objOffsetY = cache.y - this.camera.position.y;
+      var {aabbHalfWidth, aabbHalfHeight, x, y} = obj.calculationCache;
+      var objOffsetX                            = x - this.camera.position.x;
+      var objOffsetY                            = y - this.camera.position.y;
       
       // If the game object is too far away, it currently cannot be seen
-      return (objOffsetX + halfWidth  >= -this._screenOffset._x / this.camera.zoom &&
-              objOffsetX - halfWidth  <=  this._screenOffset._x / this.camera.zoom &&
-              objOffsetY + halfHeight >= -this._screenOffset._y / this.camera.zoom &&
-              objOffsetY - halfHeight <=  this._screenOffset._y / this.camera.zoom);
+      return (objOffsetX + aabbHalfWidth  >= -this._screenOffset._x / this.camera.zoom &&
+              objOffsetX - aabbHalfWidth  <=  this._screenOffset._x / this.camera.zoom &&
+              objOffsetY + aabbHalfHeight >= -this._screenOffset._y / this.camera.zoom &&
+              objOffsetY - aabbHalfHeight <=  this._screenOffset._y / this.camera.zoom);
     }
   },
 
@@ -218,24 +223,22 @@ Scene.prototype = Object.freeze(Object.create(Scene.prototype, {
       this.camera.update(dt);
       
       this._nearbyGameObjects = this._findSurroundingGameObjects(this.camera);
-      var nearbyObjectLength  = this._nearbyGameObjects.length;
       
-      for (var i = 0; i < nearbyObjectLength; i++) {
-        if (this._nearbyGameObjects[i].solid) {
-          this._quadtree.insert(this._nearbyGameObjects[i]);
-        }
+      for (let obj of this._nearbyGameObjects) {
+        if (obj.solid) this._quadtree.insert(obj);
       }
 
-      for (var i = 0; i < nearbyObjectLength; i++) {
-        this._nearbyGameObjects[i].update(dt);
+      for (let obj of this._nearbyGameObjects) {
+        obj.update(dt);
       }
       
       // Seems to be faster to have this loop in addition to the update loop above
-      for (var i = 0; i < nearbyObjectLength; i++) {
-        this._nearbyGameObjects[i].cacheCalculations();
+      for (let obj of this._nearbyGameObjects) {
+        obj.cacheCalculations();
       }
       
       this._handleCollisions(this._nearbyGameObjects);
+      this._handleOverlaps(this._nearbyGameObjects);
     }
   },
 
@@ -253,7 +256,11 @@ Scene.prototype = Object.freeze(Object.create(Scene.prototype, {
       // This seems to perform faster than using filter()
       for (let obj of this._lastDrawnGameObjects) {
         if (this.canSee(obj)) {
-          this._stage.addChild(obj);
+          // Optimization for addChild
+          obj.parent = this._stage;
+          obj.transform._parentId = -1;
+          this._stage._boundsID++;
+          this._stage.children.push(obj);
         }
       }
     }
@@ -300,20 +307,14 @@ Scene.prototype = Object.freeze(Object.create(Scene.prototype, {
   
   _outOfBucketsRange: {
     value: function (gameObject) {
-      var cache      = gameObject.calculationCache;
-      var halfWidth  = cache.aabbWidth  >> 1;
-      var halfHeight = cache.aabbHeight >> 1;
-      var x          = cache.x;
-      var y          = cache.y;
-      var bucketMinX = this._bucketConfig.minX;
-      var bucketMaxX = this._bucketConfig.maxX;
-      var bucketMinY = this._bucketConfig.minY;
-      var bucketMaxY = this._bucketConfig.maxY;
+      var {minX, maxX, minY, maxY}              = this._bucketConfig;
+      var {aabbHalfWidth, aabbHalfHeight, x, y} =
+          gameObject.calculationCache;
       
-      return (x - halfWidth  <= bucketMinX ||
-              x + halfWidth  >= bucketMaxX ||
-              y - halfHeight <= bucketMinY ||
-              y + halfHeight >= bucketMaxY);
+      return (x - aabbHalfWidth  <= minX ||
+              x + aabbHalfWidth  >= maxX ||
+              y - aabbHalfHeight <= minY ||
+              y + aabbHalfHeight >= maxY);
     }
   },
   
@@ -366,15 +367,14 @@ Scene.prototype = Object.freeze(Object.create(Scene.prototype, {
     value: function (gameObjects) {
       this._buckets = [];
       
-      var minX             =  Infinity;
-      var minY             =  Infinity;
-      var maxY             = -Infinity;
-      var maxX             = -Infinity;
-      var gameObjectLength = gameObjects.length;
+      var minX =  Infinity;
+      var minY =  Infinity;
+      var maxY = -Infinity;
+      var maxX = -Infinity;
 
       // Find min and max positions
-      for (var i = 0; i < gameObjectLength; i++) {
-        var cache = gameObjects[i].calculationCache;
+      for (let obj of gameObjects) {
+        var cache = obj.calculationCache;
 
         minX = Math.min(cache.x, minX);
         minY = Math.min(cache.y, minY);
@@ -415,7 +415,6 @@ Scene.prototype = Object.freeze(Object.create(Scene.prototype, {
   
   _partitionGameObjectsIntoBuckets: {
     value: function (gameObjects) {
-      var gameObjectLength       = gameObjects.length;
       var minX                   = this._bucketConfig.minX;
       var minY                   = this._bucketConfig.minY;
       var maxY                   = this._bucketConfig.maxY;
@@ -428,21 +427,20 @@ Scene.prototype = Object.freeze(Object.create(Scene.prototype, {
       // Add game objects to the bucket they're located in
       var bucketRatioX = (totalBucketsHorizontal - 1) / dx;
       var bucketRatioY = (totalBucketsVertical   - 1) / dy;
-      for (var i = 0; i < gameObjectLength; i++) {
-        var cache   = gameObjects[i].calculationCache;
+      
+      for (let obj of gameObjects) {
+        var cache   = obj.calculationCache;
         var bucketX = bucketRatioX * (cache.x - minX) || 0;
         var bucketY = bucketRatioY * (cache.y - minY) || 0;
 
         // Optimization: Math.floor(x) => x | 0
-        this._buckets[bucketX | 0][bucketY | 0].push(gameObjects[i]);
+        this._buckets[bucketX | 0][bucketY | 0].push(obj);
       }
     }
   },
   
   _findSurroundingBucketIndices : {
-    value : function (gameObject, bucketRadius) {
-      if (typeof bucketRadius === "undefined") bucketRadius = 1;
-
+    value : function (gameObject, bucketRadius = 1) {
       var totalBucketsHorizontal = this._buckets.length;
       var totalBucketsVertical   = this._buckets[0].length;
       
@@ -475,13 +473,10 @@ Scene.prototype = Object.freeze(Object.create(Scene.prototype, {
   
   _findSurroundingBuckets : {
     value : function (gameObject, bucketRadius) {
-      var nearBucketIndices     = this._findSurroundingBucketIndices(gameObject, bucketRadius);
-      var nearBucketIndexLength = nearBucketIndices.length;
-      var nearBuckets           = [];
+      var nearBucketIndices = this._findSurroundingBucketIndices(gameObject, bucketRadius);
+      var nearBuckets       = [];
 
-      for (var i = 0; i < nearBucketIndexLength; i++) {
-        var x = nearBucketIndices[i].x;
-        var y = nearBucketIndices[i].y;
+      for (let {x, y} of nearBucketIndices) {
         nearBuckets.push(this._buckets[x][y]);
       }
 
@@ -491,12 +486,12 @@ Scene.prototype = Object.freeze(Object.create(Scene.prototype, {
   
   _findSurroundingGameObjects : {
     value : function (gameObject, bucketRadius) {
-      var nearBuckets      = this._findSurroundingBuckets(gameObject, bucketRadius);
-      var nearBucketLength = nearBuckets.length;
-      var gameObjects      = [];
+      var nearBuckets = this._findSurroundingBuckets(gameObject, bucketRadius);
+      var gameObjects = [];
 
-      for (var i = 0; i < nearBucketLength; i++) {
-        gameObjects = gameObjects.concat(nearBuckets[i]);
+      //for (var i = 0; i < nearBucketLength; i++) {
+      for (let bucket of nearBuckets) {  
+        gameObjects = gameObjects.concat(bucket);
       }
 
       return gameObjects;
@@ -508,21 +503,22 @@ Scene.prototype = Object.freeze(Object.create(Scene.prototype, {
    */
   _resetCollisionData: {
     value: function (gameObjects) {
-      var gameObjectLength = gameObjects.length;
-      
-      for (var i = 0; i < gameObjectLength; i++) {
-        var cur = gameObjects[i];
-        cur.customData.collisionList      = [];
-        cur.collisionDisplacementSum._x   = 0;
-        cur.collisionDisplacementSum._y   = 0;
-        cur.collisionSurfaceImpulseSum._x = 0;
-        cur.collisionSurfaceImpulseSum._y = 0;
-        cur.collisionMomentumSum._x       = 0;
-        cur.collisionMomentumSum._y       = 0;
+      for (let obj of gameObjects) {
+        obj._previousVelocity._x          = obj.velocity._x;
+        obj._previousVelocity._y          = obj.velocity._y;
+        obj.collisionDisplacementSum._x   = 0;
+        obj.collisionDisplacementSum._y   = 0;
+        obj.collisionSurfaceImpulseSum._x = 0;
+        obj.collisionSurfaceImpulseSum._y = 0;
+        obj.collisionMomentumSum._x       = 0;
+        obj.collisionMomentumSum._y       = 0;
       }
       
-      this._collisionObjectCache = [];
       this._collisionObjects     = [];
+      this._collisionObjectCache = {};
+      this._collisionPairCache   = {};
+      this._distancePairCache    = {};
+      this._quadtreeCache        = {};
     }
   },
   
@@ -531,10 +527,8 @@ Scene.prototype = Object.freeze(Object.create(Scene.prototype, {
    */
   _resolveCollisions: {
     value: function () {
-      // Move the objects to resolve collisions
-      var collisionObjectLength = this._collisionObjects.length;
-      for (var i = 0; i < collisionObjectLength; i++) {
-        this._collisionObjects[i].resolveCollisions();
+      for (let obj of this._collisionObjects) {
+        obj.resolveCollisions();
       }
     }
   },
@@ -548,7 +542,7 @@ Scene.prototype = Object.freeze(Object.create(Scene.prototype, {
     value: function (obj0, obj1, collisionData) {
       // If objects are colliding, determine how much each should
       // move (based on mass: the heavier object will move less)
-      var totalDepth    = collisionData.contactPoint.depth;
+      var totalDepth    = collisionData.contactPoint.depth + 0.001;
       var direction     = collisionData.direction;
       var m0            = obj0.mass;
       var m1            = obj1.mass;
@@ -556,9 +550,15 @@ Scene.prototype = Object.freeze(Object.create(Scene.prototype, {
       var depth1        = 0;
       var displacement0 = {x: 0, y: 0};
       var displacement1 = {x: 0, y: 0};
-      var v0            = obj0.velocity.clone();
-      var v1            = obj1.velocity.clone();
       var restitution   = obj0.restitution * obj1.restitution;
+      var v0            = {
+        x: obj0._previousVelocity._x,
+        y: obj0._previousVelocity._y
+      };
+      var v1            = {
+        x: obj1._previousVelocity._x,
+        y: obj1._previousVelocity._y
+      };
 
       // Fixed objects are treated as having an infinite mass
       if (obj0.fixed) m0 = Infinity;
@@ -566,156 +566,198 @@ Scene.prototype = Object.freeze(Object.create(Scene.prototype, {
 
       // Non-fixed objects can be pushed out to resolve
       // collisions; fixed objects cannot
-      if (!obj0.fixed) {
-        depth0 = totalDepth * (1 - m0 / (m0 + m1));
-      }
-      if (!obj1.fixed) {
-        depth1 = totalDepth * (1 - m1 / (m0 + m1));
+      if (!obj0.fixed && !obj1.fixed) {
+        depth0 = depth1 = totalDepth * 0.5;
+      } else if (!obj0.fixed) {
+        depth0 = totalDepth;
+      } else {
+        depth1 = totalDepth;
       }
 
-      // Limit each object's movement up to its depth's value.
-      // This will prevent upcoming collision resolutions that
-      // produce similar values from doubling up on depth values
+      // Move the object out by its portion of penetration depth
       if (depth0 !== 0) {
-        var curSum          = obj0.collisionDisplacementSum;
-        var sumDotDirection = curSum.x * direction.x + curSum.y * direction.y;
-        sumDotDirection *= -1;
+        // Move in the direction as much as possible
+        obj0.collisionDisplacementSum.x -= direction.x * depth0;
+        obj0.collisionDisplacementSum.y -= direction.y * depth0;
 
-        if (sumDotDirection < depth0) {
-          var depthLimitRatio = 1 - sumDotDirection / depth0;
-          displacement0.x = direction.x * -depth0;
-          displacement0.y = direction.y * -depth0;
-
-          // Move in the direction as much as possible
-          obj0.collisionDisplacementSum.x += displacement0.x * depthLimitRatio;
-          obj0.collisionDisplacementSum.y += displacement0.y * depthLimitRatio;
+        if (!this._collisionObjectCache[obj0.wflId]) {
+          this._collisionObjectCache[obj0.wflId] = true;
           
-          // Conservation of momentum
-          // Distribute velocities between the two bodies
-          if (m1 === Infinity) {
-            var v = geom.Vec2.add(
-              v0.clone().multiply(-1),
-              v1.clone().multiply(2)
-            );
-          } else {
-            var v = geom.Vec2.add(
-              v0.clone().multiply((m0 - m1) / (m0 + m1)),
-              v1.clone().multiply(2 * m1 / (m0 + m1))
-            );
-          }
-          obj0.collisionMomentumSum._x += v._x * restitution;
-          obj0.collisionMomentumSum._y += v._y * restitution;
-
-          if (!this._collisionObjectCache[obj0.wflId]) {
-            this._collisionObjectCache.push(obj0.wflId);
+          if (!obj0.fixed) {
             this._collisionObjects.push(obj0);
           }
         }
+        
+        // Conservation of momentum
+        // Distribute velocities between the two bodies
+        var momentum0 = {x: 0, y: 0};
+        if (m1 === Infinity) {
+          momentum0.x = 2 * v1.x - v0.x;
+          momentum0.y = 2 * v1.y - v0.y;
+        } else {
+          momentum0.x =
+            v0.x * (m0 - m1) / (m0 + m1) +
+            v1.x * 2 * m1 / (m0 + m1);
+          momentum0.y =
+            v0.y * (m0 - m1) / (m0 + m1) +
+            v1.y * 2 * m1 / (m0 + m1);
+        }
+        obj0.collisionMomentumSum._x += momentum0.x * restitution;
+        obj0.collisionMomentumSum._y += momentum0.y * restitution;
       }
 
       // Flip direction before limiting obj1's depth movement too
       direction.x *= -1;
       direction.y *= -1;
 
+      // Move the object out by its portion of penetration depth
       if (depth1 !== 0) {
-        var curSum          = obj1.collisionDisplacementSum;
-        var sumDotDirection = curSum.x * direction.x + curSum.y * direction.y;
-        sumDotDirection *= -1;
-
-        if (sumDotDirection < depth1) {
-          var depthLimitRatio = 1 - sumDotDirection / depth1;
-          displacement1.x = direction.x * -depth1;
-          displacement1.y = direction.y * -depth1;
-
-          // Move in the direction as much as possible
-          obj1.collisionDisplacementSum.x += displacement1.x * depthLimitRatio;
-          obj1.collisionDisplacementSum.y += displacement1.y * depthLimitRatio;
+        // Move in the direction as much as possible
+        obj1.collisionDisplacementSum.x -= direction.x * depth1;
+        obj1.collisionDisplacementSum.y -= direction.y * depth1;
+        
+        if (!this._collisionObjectCache[obj1.wflId]) {
+          this._collisionObjectCache[obj1.wflId] = true;
           
-          // Conservation of momentum
-          // Distribute velocities between the two bodies
-          if (m0 === Infinity) {
-            var v = geom.Vec2.add(
-              v1.clone().multiply(-1),
-              v0.clone().multiply(2)
-            );
-          } else {
-            var v = geom.Vec2.add(
-              v1.clone().multiply((m1 - m0) / (m1 + m0)),
-              v0.clone().multiply(2 * m0 / (m1 + m0))
-            );
-          }
-          obj1.collisionMomentumSum._x += v._x * restitution;
-          obj1.collisionMomentumSum._y += v._y * restitution;
-
-          if (!this._collisionObjectCache[obj1.wflId]) {
-            this._collisionObjectCache.push(obj1.wflId);
+          if (!obj1.fixed) {
             this._collisionObjects.push(obj1);
           }
         }
+        
+        // Conservation of momentum
+        // Distribute velocities between the two bodies
+        var momentum1 = {x: 0, y: 0};
+        if (m0 === Infinity) {
+          momentum1.x = 2 * v0.x - v1.x;
+          momentum1.y = 2 * v0.y - v1.y;
+        } else {
+          momentum1.x =
+            v1.x * (m1 - m0) / (m1 + m0) +
+            v0.x * 2 * m0 / (m1 + m0);
+          momentum1.y =
+            v1.y * (m1 - m0) / (m1 + m0) +
+            v0.y * 2 * m0 / (m1 + m0);
+        }
+        obj1.collisionMomentumSum._x += momentum1.x * restitution;
+        obj1.collisionMomentumSum._y += momentum1.y * restitution;
       }
 
-      obj0.onCollide(obj1);
-      obj1.onCollide(obj0);
+      // Flip direction before limiting obj1's depth movement too
+      direction.x *= -1;
+      direction.y *= -1;
+      obj0.onCollide(obj1, collisionData);
+      // Flip direction before limiting obj1's depth movement too
+      direction.x *= -1;
+      direction.y *= -1;
+      obj1.onCollide(obj0, collisionData);
+      
+      // Now resolve collisions
+      obj0.resolveCollisions();
+      obj1.resolveCollisions();
     }
   },
   
   _findAllCollisions: {
     value: function (gameObjects) {
-      var gameObjectLength = gameObjects.length;
+      var distancePairCache  = this._distancePairCache;
+      var collisionPairCache = this._collisionPairCache;
+      var quadtreeCache      = this._quadtreeCache;
       
-      // Check collisions
-      for (var i = 0; i < gameObjectLength; i++) {
-        var obj0 = gameObjects[i];
-
-        var possibleCollisions = [];
-        this._quadtree.retrieve(possibleCollisions, obj0);
-        var possibleCollisionLength = possibleCollisions.length;
+      for (let obj0 of gameObjects) {
+        var wflId0             = obj0.wflId;
+        var possibleCollisions = quadtreeCache[wflId0];
 
         // Sort the objects so that the nearest ones are handled first
         possibleCollisions.sort((a, b) => {
-          var aDistSquared = geom.Vec2.subtract(obj0.position, a.position)
-                            .getMagnitudeSquared();
-          var bDistSquared = geom.Vec2.subtract(obj0.position, b.position)
-                            .getMagnitudeSquared();
-
-          return aDistSquared - bDistSquared;
+          return distancePairCache[wflId0 + "_" + a.wflId] -
+                 distancePairCache[wflId0 + "_" + b.wflId];
         });
+        
+        for (let obj1 of possibleCollisions) {
+          var wflId1       = obj1.wflId;
+          var pairHashKeyA = wflId0 + "_" + wflId1;
 
-        for (var j = 0; j < possibleCollisionLength; j++) {
-          var obj1 = possibleCollisions[j];
+          if (!this._collisionPairCache[pairHashKeyA]) {
+            var pairHashKeyB = wflId1 + "_" + wflId0;
+            collisionPairCache[pairHashKeyA] = true;
+            collisionPairCache[pairHashKeyB] = true;
 
-          if (obj1 && obj0 !== obj1) {
-            // (Optimization) Determine if a collision check is necessary.
-            // - If both objects aren't solid, they cannot collide.
-            // - If both objects are fixed, they can never collide.
-            if ((obj0.solid || obj1.solid) && (!obj0.fixed || !obj1.fixed)) {
-              if (obj0.customData.collisionList.indexOf(obj1.wflId) === -1) {
-                // Add each object to each other's list so this check doesn't
-                // happen again
-                obj0.customData.collisionList.push(obj1.wflId);
-                obj1.customData.collisionList.push(obj0.wflId);
-
-                // Check for custom collision filters before proceeding
-                if (!obj0.canCollide(obj1) || !obj1.canCollide(obj0)) {
-                  continue;
-                }
-
-                var collisionData = obj0.checkCollision(obj1);
-
-                if (collisionData.colliding) {
-                  // TODO: Handle not having a contact point (like when one
-                  // object is inside another)
-                  if (!collisionData.contactPoint) {
-                    continue;
-                  }
-                  
-                  this._finalizeCollision(obj0, obj1, collisionData);
-                }
+            var collisionData = obj0.checkCollision(obj1);
+            if (collisionData.colliding) {
+              // TODO: Handle not having a contact point (like when one
+              // object is inside another)
+              if (collisionData.contactPoint) {
+                this._finalizeCollision(obj0, obj1, collisionData);
               }
             }
           }
         }
       }
+    }
+  },
+  
+  /**
+   * Cache quadtree and distance data for objects that need to be checked for
+   * collisions
+   */
+  _cacheData : {
+    value : function (gameObjects) {
+      var needNarrowPhase    = [];
+      var distancePairCache  = {};
+      var collisionPairCache = {};
+      var quadtreeCache      = {};
+      var quadtree           = this._quadtree;
+      var wflId0             = -1;
+      var wflId1             = -1;
+      
+      for (let obj0 of gameObjects) {
+        var cache              = obj0.calculationCache;
+        var px0                = cache.px;
+        var py0                = cache.py;
+        var possibleCollisions = [];
+        var probableCollisions = [];
+
+        wflId0 = obj0.wflId;
+        quadtree.retrieve(possibleCollisions, obj0);
+
+        for (let obj1 of possibleCollisions) {
+          // If the object passes the broad phase check, it will be
+          // considered for further collision analysis later on
+          if (obj0.checkBroadPhaseCollision(obj1) &&
+              obj0.canCollide(obj1) &&
+              obj1.canCollide(obj0) &&
+              wflId0 !== (wflId1 = obj1.wflId)) {
+
+            var pairHashKeyA = wflId0 + "_" + wflId1;
+            if (distancePairCache[pairHashKeyA] === undefined) {
+              var {px, py}     = obj1.calculationCache;
+              var pairHashKeyB = wflId1 + "_" + wflId0;
+              var distSquared  =
+                  (px0 - px) * (px0 - px) + 
+                  (py0 - py) * (py0 - py);
+
+              distancePairCache[pairHashKeyA]  = distSquared;
+              distancePairCache[pairHashKeyB]  = distSquared;
+              collisionPairCache[pairHashKeyA] = false;
+              collisionPairCache[pairHashKeyB] = false;
+              probableCollisions.push(obj1);
+            }
+          }
+        }
+        
+        // Keep a reference to the probable collisions with this object
+        if (probableCollisions.length > 0) {
+          // Keep a reference to the probable collisions with this object
+          quadtreeCache[wflId0] = probableCollisions;
+          needNarrowPhase.push(obj0);
+        }
+      }
+      
+      this._distancePairCache  = distancePairCache;
+      this._collisionPairCache = collisionPairCache;
+      this._quadtreeCache      = quadtreeCache;
+      
+      return needNarrowPhase;
     }
   },
 
@@ -725,17 +767,60 @@ Scene.prototype = Object.freeze(Object.create(Scene.prototype, {
   _handleCollisions : {
     value : function (gameObjects) {
       // Only directly check collisions for objects that aren't fixed
-      var nonFixedObjects = gameObjects.filter((obj) => !obj.fixed);
+      var needBroadPhase  = gameObjects.filter(
+        (obj) => !obj.fixed && obj.solid
+      );
+      var needNarrowPhase = [];
 
       for (var k = 0; k < this.collisionIterations; k++) {
-        this._resetCollisionData(gameObjects);
-        this._findAllCollisions(nonFixedObjects);
-        this._resolveCollisions();
+        this._resetCollisionData(needBroadPhase);
+        
+        needNarrowPhase = this._cacheData(needBroadPhase);
+        this._findAllCollisions(needNarrowPhase);
 
         // Only do more collision iterations if something has collided this
         // frame
         if (this._collisionObjects.length === 0) {
           break;
+        }
+        
+        // Only continue to resolve collisions for objects that have just
+        // collided. If it wasn't just in a collision, it won't need to resolve
+        // a collision now.
+        needBroadPhase = this._collisionObjects;
+      }
+    }
+  },
+  
+  _handleOverlaps: {
+    value: function (gameObjects) {
+      var quadtreeCache = this._quadtreeCache;
+      var quadtree      = this._quadtree;
+      
+      // Only directly check overlaps for objects that allow overlap events
+      var availableObjects = gameObjects.filter(
+        (obj) => obj.allowOverlapEvents
+      );
+      
+      for (let obj0 of availableObjects) {
+        var cache              = obj0.calculationCache;
+        var possibleCollisions = [];
+        var wflId0             = obj0.wflId;
+        
+        if (quadtreeCache[wflId0]) {
+          possibleCollisions = quadtreeCache[wflId0];
+        } else {
+          quadtree.retrieve(possibleCollisions, obj0);
+        }
+        
+        for (let obj1 of possibleCollisions) {
+          if (obj0.checkBroadPhaseCollision(obj1)) {
+            obj0.onOverlap(obj1);
+            
+            if (obj1.allowOverlapEvents) {
+              obj1.onOverlap(obj0);
+            }
+          }
         }
       }
     }
