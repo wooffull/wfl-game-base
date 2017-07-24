@@ -12,40 +12,6 @@ const PhysicsObject = require('../core/entities');
 var Scene = function (canvas) {
   this._stage = new PIXI.Container();
   
-  this._gameObjectLayers = undefined;
-  this._screenOffset     = new geom.Vec2(canvas.width * 0.5, canvas.height * 0.5);
-  this._quadtree         = new datastructure.Quadtree(0, {
-    x:      0,
-    y:      0,
-    width:  canvas.width,
-    height: canvas.height
-  });
-  
-  this._lastDrawnGameObjects      = [];
-  this._nonPartitionedGameObjects = []; // Cleared every frame
-  this._nearbyGameObjects         = [];
-  this._buckets                   = [];
-  this._bucketConfig              = {
-    size:      Math.max(canvas.width, canvas.height) * 0.5,
-    minX:      Infinity,
-    minY:      Infinity,
-    maxX:     -Infinity,
-    maxY:     -Infinity,
-    forceCalc: false
-  };
-
-  // List of objects that have been in a collision and need to resolve
-  this._collisionObjects = [];
-  
-  // Holds object IDs if they've been in a collision and need to resolve
-  this._collisionObjectCache = {};
-  
-  // Cache of distances from obj0 to obj0, where the key is
-  // obj0.wflId + "_" + obj01.wflId
-  this._distancePairCache  = {};
-  this._quadtreeCache      = {};
-  this._collisionPairCache = {};
-
   this.canvas              = canvas;
   this.camera              = new cameras.Camera();
   this.bg                  = new backgrounds.StaticBackground();
@@ -80,7 +46,47 @@ Scene.prototype = Object.freeze(Object.create(Scene.prototype, {
    */
   reset : {
     value : function () {
+      var canvas = this.canvas;
+      
+      this._stage.removeChildren();
       this._gameObjectLayers = { 0 : [] };
+      
+      this._screenOffset     = new geom.Vec2(canvas.width * 0.5, canvas.height * 0.5);
+      this._quadtree         = new datastructure.Quadtree(0, {
+        x:      0,
+        y:      0,
+        width:  canvas.width,
+        height: canvas.height
+      });
+
+      // Updated every frame regardless of camera position
+      this._persistingGameObjects     = [];
+
+      this._lastDrawnGameObjects      = [];
+      this._nonPartitionedGameObjects = []; // Cleared every frame
+      this._nearbyGameObjects         = [];
+      this._gameObjectsToUpdate       = [];
+      this._buckets                   = [[]];
+      this._bucketConfig              = {
+        size:      Math.max(canvas.width, canvas.height) * 0.5,
+        minX:      Infinity,
+        minY:      Infinity,
+        maxX:     -Infinity,
+        maxY:     -Infinity,
+        forceCalc: false
+      };
+
+      // List of objects that have been in a collision and need to resolve
+      this._collisionObjects = [];
+
+      // Holds object IDs if they've been in a collision and need to resolve
+      this._collisionObjectCache = {};
+
+      // Cache of distances from obj0 to obj0, where the key is
+      // obj0.wflId + "_" + obj01.wflId
+      this._distancePairCache  = {};
+      this._quadtreeCache      = {};
+      this._collisionPairCache = {};
     }
   },
   
@@ -113,7 +119,7 @@ Scene.prototype = Object.freeze(Object.create(Scene.prototype, {
    * Adds a game object to the scene
    */
   addGameObject : {
-    value : function (obj, layerId) {
+    value : function (obj, layerId, persists = false) {
       // If no layerId, push to the top of the bottom layer
       if (typeof layerId === "undefined") {
         layerId = 0;
@@ -143,6 +149,12 @@ Scene.prototype = Object.freeze(Object.create(Scene.prototype, {
       }
       
       this._nonPartitionedGameObjects.push(obj);
+      
+      // If this game object needs to be updated every frame, we'll add it
+      // to another array for quick reference
+      if (persists) {
+        this._persistingGameObjects.push(obj);
+      }
     }
   },
 
@@ -192,10 +204,22 @@ Scene.prototype = Object.freeze(Object.create(Scene.prototype, {
         bucket.splice(indexInBucket, 1);
       }
       
+      // Remove the game object from persisting game objects
+      var indexInPersisting = this._persistingGameObjects.indexOf(obj);
+      if (indexInPersisting >= 0) {
+        this._persistingGameObjects.splice(indexInPersisting, 1);
+      }
+      
       // Remove the game object from nearby game objects
       var indexInNearby = this._nearbyGameObjects.indexOf(obj);
       if (indexInNearby >= 0) {
         this._nearbyGameObjects.splice(indexInNearby, 1);
+      }
+      
+      // Remove the game object from updating game objects
+      var indexInUpdating = this._gameObjectsToUpdate.indexOf(obj);
+      if (indexInUpdating >= 0) {
+        this._gameObjectsToUpdate.splice(indexInUpdating, 1);
       }
     }
   },
@@ -222,23 +246,47 @@ Scene.prototype = Object.freeze(Object.create(Scene.prototype, {
       this._updateBuckets();
       this.camera.update(dt);
       
-      this._nearbyGameObjects = this._findSurroundingGameObjects(this.camera);
+      this._nearbyGameObjects   = this._findSurroundingGameObjects(this.camera);
+      this._gameObjectsToUpdate = this.getGameObjectsToUpdate();
       
-      for (let obj of this._nearbyGameObjects) {
+      for (let obj of this._gameObjectsToUpdate) {
         if (obj.solid) this._quadtree.insert(obj);
       }
 
-      for (let obj of this._nearbyGameObjects) {
+      for (let obj of this._gameObjectsToUpdate) {
         obj.update(dt);
       }
       
       // Seems to be faster to have this loop in addition to the update loop above
-      for (let obj of this._nearbyGameObjects) {
+      for (let obj of this._gameObjectsToUpdate) {
         obj.cacheCalculations();
       }
       
-      this._handleCollisions(this._nearbyGameObjects);
-      this._handleOverlaps(this._nearbyGameObjects);
+      this._handleCollisions(this._gameObjectsToUpdate);
+      this._handleOverlaps(this._gameObjectsToUpdate);
+    }
+  },
+  
+  getGameObjectsToUpdate : {
+    value : function () {
+      let neighborBucketIndices = 
+        this._findSurroundingBucketIndices(this.camera);
+      
+      // Add all persisting game objects that aren't in nearby buckets
+      return this._nearbyGameObjects.concat(
+        this._persistingGameObjects.filter((obj) => {
+          // Do not keep the game object if its containing bucket is nearby
+          for (let bucket of neighborBucketIndices) {
+            if (obj._bucketPosition.x === bucket.x &&
+                obj._bucketPosition.y === bucket.y) {
+              return false;
+            }
+          }
+          
+          // Otherwise, keep it
+          return true;
+        })
+      );
     }
   },
 
@@ -324,7 +372,7 @@ Scene.prototype = Object.freeze(Object.create(Scene.prototype, {
 
       // Check if any nearby game objects are out of any bucket's range
       if (!forceCalc) {
-        for (const obj of this._nearbyGameObjects) {
+        for (const obj of this._gameObjectsToUpdate) {
           if (this._outOfBucketsRange(obj)) {
             forceCalc = true;
             break;
@@ -348,7 +396,7 @@ Scene.prototype = Object.freeze(Object.create(Scene.prototype, {
           this._buckets[bucketX][bucketY] = [];
         }
 
-        this._partitionGameObjectsIntoBuckets(this._nearbyGameObjects.concat(this._nonPartitionedGameObjects));
+        this._partitionGameObjectsIntoBuckets(this._gameObjectsToUpdate.concat(this._nonPartitionedGameObjects));
       }
       
       this._nonPartitionedGameObjects = [];
@@ -430,11 +478,16 @@ Scene.prototype = Object.freeze(Object.create(Scene.prototype, {
       
       for (let obj of gameObjects) {
         var cache   = obj.calculationCache;
-        var bucketX = bucketRatioX * (cache.x - minX) || 0;
-        var bucketY = bucketRatioY * (cache.y - minY) || 0;
-
+        
         // Optimization: Math.floor(x) => x | 0
-        this._buckets[bucketX | 0][bucketY | 0].push(obj);
+        var bucketX = (bucketRatioX * (cache.x - minX) | 0) || 0;
+        var bucketY = (bucketRatioY * (cache.y - minY) | 0) || 0;
+        
+        // Update the bucket data for the game object
+        obj._bucketPosition.x = bucketX;
+        obj._bucketPosition.y = bucketY;
+
+        this._buckets[bucketX][bucketY].push(obj);
       }
     }
   },
@@ -829,7 +882,10 @@ Scene.prototype = Object.freeze(Object.create(Scene.prototype, {
   _onResize: {
     value: function (e) {
       this._bucketConfig.forceCalc = true;
-      this._bucketConfig.size      = Math.max(window.innerWidth, window.innerHeight) * 0.5;
+      this._bucketConfig.size      = Math.ceil(
+        Math.max(window.innerWidth, window.innerHeight) * 0.5 /
+        this.camera.zoom
+      );
     }
   }
 }));

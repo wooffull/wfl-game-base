@@ -20,6 +20,8 @@ var GameObject = function () {
   // Optimization: Use transform.position to avoid the getter for position
   this.transform.position = new geom.Vec2(this.position.x, this.position.y);
   
+  this.transform.rotation = 0; // Updated per frame according to this.forward
+  
   this.wflId              = idCounter++;
   this.vertices           = [];
   this.states             = {};
@@ -27,13 +29,19 @@ var GameObject = function () {
   this.layer              = undefined;
   this.customData         = {};
   this.calculationCache   = {};
+  this.forward            = new geom.Vec2(1, 0);
+  
+  // If false, the collision vertices in this game object's frame objects
+  // will not rotate with the forward
+  this.allowVertexRotation = true;
   
   // A reference to the previously added sprite so that it can be removed when
   // a new sprite is set with _setSprite()
   this._prevSprite        = undefined;
   
-  this._cachedWidth  = 0;
-  this._cachedHeight = 0;
+  this._bucketPosition = {x: 0, y: 0};
+  this._cachedWidth    = 0;
+  this._cachedHeight   = 0;
 };
 
 Object.defineProperties(GameObject, {
@@ -65,6 +73,8 @@ GameObject.prototype = Object.freeze(Object.create(PIXI.Container.prototype, {
         this.currentState.update(dt);
         this._setSprite(this.currentState.sprite);
       }
+      
+      this.transform.rotation = Math.atan2(this.forward._y, this.forward._x);
     }
   },
   
@@ -107,6 +117,29 @@ GameObject.prototype = Object.freeze(Object.create(PIXI.Container.prototype, {
         this.calculationCache.aabbWidth,
         this.calculationCache.aabbHeight
       );
+    }
+  },
+
+  rotate: {
+    value: function (theta) {
+      this.forward.rotate(theta);
+      this.transform.rotation = this.forward.getAngle();
+
+      if (this.allowVertexRotation) {
+        for (var stateName in this.states) {
+          var state = this.states[stateName];
+
+          for (var i = 0; i < state.frameObjects.length; i++) {
+            var frameObject = state.frameObjects[i];
+
+            for (var j = 0; j < frameObject.vertices.length; j++) {
+              frameObject.vertices[j].rotate(theta);
+            }
+          }
+        }
+      }
+
+      return this;
     }
   },
 

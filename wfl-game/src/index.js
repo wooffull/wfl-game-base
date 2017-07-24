@@ -24,6 +24,9 @@ module.exports = {
 
   // Consistent reference for jQuery
   jquery:        require('jquery'),
+  
+  // Consistent reference for PIXI
+  PIXI:          require('pixi.js'),
 
   create:        create
 };

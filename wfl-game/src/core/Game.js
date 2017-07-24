@@ -124,7 +124,6 @@ Game.prototype = Object.freeze(Object.create(Game.prototype, {
     value: function (scene) {
       if (this._scene) {
         this.stage.removeChild(this._scene._stage);
-        this._scene.keyboard = undefined;
         this._scene.nextScene = undefined;
         this._scene.destroy();
       }

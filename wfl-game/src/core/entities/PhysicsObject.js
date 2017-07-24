@@ -12,24 +12,17 @@ var tempVector = new geom.Vec2();
  */
 var PhysicsObject = function () {
   GameObject.call(this);
-  
-  this.transform.rotation = 0; // Updated per frame according to this.forward
 
   this.velocity           = new geom.Vec2();
   this.acceleration       = new geom.Vec2();
   this.maxSpeed           = PhysicsObject.DEFAULT_MAX_SPEED;
   this.maxAcceleration    = PhysicsObject.DEFAULT_MAX_ACCELERATION;
-  this.forward            = new geom.Vec2(1, 0);
   this.mass               = 1.0;
   this.friction           = 0.0; // This object's surface's friction
   this.restitution        = 0.0; // This object's surface's bounciness
   this.solid              = true;
   this.fixed              = false;
   this.allowOverlapEvents = false;
-  
-  // If false, the collision vertices in this game object's frame objects
-  // will not rotate with the forward
-  this.allowVertexRotation = true;
   
   // 2D vectors that describes how much this PhysicsObject has to move this
   // frame to resolve its collisions
@@ -123,27 +116,12 @@ PhysicsObject.prototype = Object.freeze(Object.create(GameObject.prototype, {
 
   rotate: {
     value: function (theta) {
-      this.forward.rotate(theta);
-      this.transform.rotation = this.forward.getAngle();
-
       if (this.allowVertexRotation) {
-        for (var stateName in this.states) {
-          var state = this.states[stateName];
-
-          for (var i = 0; i < state.frameObjects.length; i++) {
-            var frameObject = state.frameObjects[i];
-
-            for (var j = 0; j < frameObject.vertices.length; j++) {
-              frameObject.vertices[j].rotate(theta);
-            }
-          }
-        }
-        
         // Reset SAT Axes
         this._satAxes = null;
       }
 
-      return this;
+      return GameObject.prototype.rotate.call(this, theta);
     }
   },
 
@@ -200,14 +178,14 @@ PhysicsObject.prototype = Object.freeze(Object.create(GameObject.prototype, {
         this.transform.position._y += this.velocity._y * dt;
       }
       
-      this.transform.rotation = Math.atan2(this.forward._y, this.forward._x);
-      
       // Optimization: Includes GameObject's update() via copypaste to prevent
       // Function.prototype.call()
       if (this.currentState !== undefined) {
         this.currentState.update(dt);
         this._setSprite(this.currentState.sprite);
       }
+      
+      this.transform.rotation = Math.atan2(this.forward._y, this.forward._x);
     }
   },
   
